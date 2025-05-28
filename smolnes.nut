@@ -37,6 +37,8 @@ function toInt8 (x) {
 
 // Whether to print debug information
 ::DBG <- 0;
+// How many CPU cycles to simulate per game tick
+::cycles_per_tick <- 32;
 
 ::prg <- array(4, 0); ::chr <- array(8, 0);   // Current PRG/CHR banks
 ::prgbits <- 14; ::chrbits <- 12;       // Number of bits per PRG/CHR bank
@@ -356,9 +358,11 @@ function set_nz(val, src) {
 
   ::total_cycles <- 0;
 
-  ::cpu_interval <- ppmod.interval(function () {
+  // ::cpu_interval <- ppmod.interval(function () {
     // printl("Total cycles: " + total_cycles);
-  for (local _i = 0; _i < 16; _i ++) {
+  ppmod.interval(function () {
+  for (local _i = 0; _i < cycles_per_tick; _i ++) {
+  ppmod.runscript("worldspawn", function () {
     total_cycles++;
 
     // if (total_cycles == 49295) {
@@ -964,6 +968,7 @@ function set_nz(val, src) {
         scany = toUint16(scany % 262);
       }
     }
+  });
   }
-  }, FrameTime());
+  });
 }
