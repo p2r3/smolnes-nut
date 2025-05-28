@@ -354,7 +354,19 @@ function set_nz(val, src) {
   PCL = mem(~3, ~0, 0, 0);
   PCH = mem(~2, ~0, 0, 0);
 
-  while (true) {
+  ::total_cycles <- 0;
+
+  ::cpu_interval <- ppmod.interval(function () {
+    // printl("Total cycles: " + total_cycles);
+  for (local _i = 0; _i < 16; _i ++) {
+    total_cycles++;
+
+    // if (total_cycles == 49295) {
+    //   // printl("Reached cycle " + total_cycles);
+    //   activator.Destroy();
+    //   break;
+    // }
+
     cycles = nomem = 0;
 
     if (nmi_irq) goto <- "nmi_irq";
@@ -953,4 +965,5 @@ function set_nz(val, src) {
       }
     }
   }
+  }, FrameTime());
 }
