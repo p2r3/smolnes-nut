@@ -2,11 +2,11 @@
  * The smolnes NES emulator, crudely ported to Squirrel for Portal 2
  *
  * Some implementation notes: Squirrel doesn't have function closure
- * or really any similar system outside of static captures, so all
+ * (or really any similar system outside of static captures), so all
  * top-level variables are defined globally. Oh, and no types either.
  * Initial values are all 0, which (I think) matches C behavior.
  *
- * To simulate integer types, the toUint* functions are used wherever
+ * To simulate integer types, the u* and i* functions are used wherever
  * a risk of an out-of-range value is conceivable. Logic may be altered
  * wherever post-increment decrement operators were used.
  *
