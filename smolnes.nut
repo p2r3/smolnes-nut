@@ -42,6 +42,8 @@ function i8 (x) {
 ::cycles_per_tick <- 128;
 // Size of individual pixels (higher = better perf, lower = better qual)
 ::pixel_size <- 7;
+// Used to simulate C "goto" behavior
+::goto <- null;
 
 // These variables were originally uint8_t and should be typecasted accordingly
 ::prg <- array(4, 0); ::chr <- array(8, 0);   // Current PRG/CHR banks
@@ -111,12 +113,6 @@ function i8 (x) {
 
 // Unlike other values/registers above, this is a *regular signed integer*!!
 ::shift_at <- 0;
-
-// Used to simulate C "goto" behavior
-::goto <- null;
-// Set to true when the framebuffer has finished updating
-// The renderer is responsible for flipping this back to false
-::frame_ready <- false;
 
 // Read a byte from CHR ROM or CHR RAM.
 function get_chr_byte(a) {
@@ -876,7 +872,7 @@ function handle_irq () {
       ppuctrl & 128 ? (nmi_irq = 4) : 0;
       ppustatus = u8(ppustatus | 128);
 
-      ::frame_ready <- true;
+      EntFire("nes_pixel", "RunScriptCode", "_updatePixel()");
     }
 
     // Clear ppustatus.
