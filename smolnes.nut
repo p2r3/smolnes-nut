@@ -102,7 +102,6 @@ function toInt8 (x) {
 
 // Read a byte from CHR ROM or CHR RAM.
 function get_chr_byte(a) {
-  a = toUint16(a);
   if (rombuf[5]) {
     return toUint8(rombuf[(16 + ((prg[1] + 1) << 14)) + (chr[a >>> chrbits] << chrbits | a & (1 << chrbits) - 1)]);
   } else {
@@ -113,7 +112,6 @@ function get_chr_byte(a) {
 // Get the buffer address of a byte from CHR ROM or CHR RAM
 // The caller is responsible for determining the applicable buffer
 function get_chr_byte_idx(a) {
-  a = toUint16(a);
   if (rombuf[5]) {
     return (16 + ((prg[1] + 1) << 14)) + (chr[a >>> chrbits] << chrbits | a & (1 << chrbits) - 1);
   } else {
@@ -123,7 +121,6 @@ function get_chr_byte_idx(a) {
 
 // Get the buffer address of a byte from nametable RAM
 function get_nametable_byte_idx(a) {
-  a = toUint16(a);
   return        !mirror      ? a % 1024                  // single bank 0
                : mirror == 1 ? a % 1024 + 1024           // single bank 1
                : mirror == 2 ? a & 2047                  // vertical mirroring
@@ -680,7 +677,7 @@ function set_nz(val, src) {
       // add:
       if (goto == "add") goto = null;
       if (!goto) {
-        sum = toUint16(A + val + (P & 1));
+        sum = A + val + (P & 1);
         P = toUint8(P & ~65 | (sum > 255).tointeger() | (~(A ^ val) & (val ^ sum) & 128) / 2);
         set_nz(A = toUint8(sum), "ADC");
         break;
@@ -962,8 +959,8 @@ function set_nz(val, src) {
       // frame. Scanline 261 is represented as -1.
       if (++dot == 341) {
         dot = 0;
-        scany = toUint16(scany + 1);
-        scany = toUint16(scany % 262);
+        scany = scany + 1;
+        scany = scany % 262;
       }
     }
   });
