@@ -39,13 +39,15 @@ function toInt8 (x) {
 ::DBG <- 0;
 // How many CPU cycles to simulate per game tick
 ::cycles_per_tick <- 128;
+// Size of individual pixels (higher = better perf, lower = better qual)
+::pixel_size <- 7;
 
 ::prg <- array(4, 0); ::chr <- array(8, 0);   // Current PRG/CHR banks
 ::prgbits <- 14; ::chrbits <- 12;       // Number of bits per PRG/CHR bank
 ::A <- 0; ::X <- 0; ::Y <- 0; ::P <- 4; ::S <- toUint8(~2); ::PCH <- 0; ::PCL <- 0; // CPU Registers
 ::addr_lo <- 0; ::addr_hi <- 0;                 // Current instruction address
 ::nomem <- 0;  // 1 => current instruction doesn't write to memory
-::result <- 0; // Temp variabl)e
+::result <- 0; // Temp variable
 ::val <- 0;    // Current instruction value
 ::cross <- 0;  // 1 => page crossing occurred
 ::tmp <- 0;    // Temp variables
@@ -94,8 +96,18 @@ function toInt8 (x) {
 ::atb <- 0;                        // Attribute byte
 ::shift_hi <- 0; ::shift_lo <- 0;  // Pattern table shift registers
 ::cycles <- 0;                     // Cycle count for current instruction
-::frame_buffer <- array(61440, 0);    // 256x240 pixel frame buffer. Top and bottom 8 rows
-                                   // are not drawn.
+::frame_buffer <- array(61440, 0); // 256x240 pixel frame buffer.
+::frame_ready <- false;
+
+::fb_pixels <- [25356, 34816, 39011, 30854, 24714, 4107,  106,   2311,
+                2468,  2561,  4642,  6592,  20832, 0,     0,     0,
+                44373, 49761, 55593, 51341, 43186, 18675, 434,   654,
+                4939,  5058,  3074,  19362, 37667, 0,     0,     0,
+                65535, 64716, 64497, 64342, 62331, 43932, 23612, 9465,
+                1429,  1550,  20075, 36358, 52713, 16904, 0,     0,
+                65535  65207, 65113, 65083, 65053, 58911, 50814, 42620,
+                40667, 40729, 48951, 53078, 61238, 44405];
+
 ::goto <- null;
 
 ::shift_at <- 0;
@@ -173,7 +185,7 @@ function mem(lo, hi, val, write) {
         }
       }
       if (DBG && !write) printl("V = " + V + ", ppubuf = " + ppubuf);
-      V = V + (ppuctrl & 4 ? 32 : 1);
+      V = toUint16(V + (ppuctrl & 4 ? 32 : 1));
       V = V % 16384;
       return tmp;
     }
@@ -321,11 +333,598 @@ function read_pc() {
 }
 
 // Set N (negative) and Z (zero) flags of `P` register, based on `val`.
-function set_nz(val, src) {
+function set_nz(val) {
   // printl("@" + src + " " + val + ", " + (P & toUint8(~130)) + " | " + (val & 128) + " | " + ((!val).tointeger() * 2));
   if (DBG) printl(val + ", " + (P & -131) + " | " + (val & 128) + " | " + ((!val).tointeger() * 2));
   return P = toUint8(P & -131 | val & 128 | (!val).tointeger() * 2);
 }
+
+::smolnes_main_loop <- function () {
+
+  cycles = nomem = 0;
+
+  if (nmi_irq) goto <- "nmi_irq";
+
+  if (!goto) {
+    opcode = read_pc(); // 76
+    // printl(opcode);
+  } else {
+    // printl(goto);
+  }
+
+  if (goto == "nmi_irq") {
+    goto = null;
+    mem(S, 1, PCH, 1); S = toUint8(S - 1);
+    mem(S, 1, PCL, 1); S = toUint8(S - 1);
+    mem(S, 1, P | 32, 1); S = toUint8(S - 1);
+    // BRK/IRQ vector is $ffff, NMI vector is $fffa
+    PCL = mem(~1 - (nmi_irq & 4), ~0, 0, 0);
+    PCH = mem(~0 - (nmi_irq & 4), ~0, 0, 0);
+    nmi_irq = 0;
+    cycles = (cycles + 1);
+    cycles = (cycles + 4);
+  } else switch (opcode & 31) { // 13
+  case 0:
+    if (!goto) {
+      if (opcode & 128) { // LDY/CPY/CPX imm
+        read_pc();
+        nomem = 1;
+        goto <- "nomemop";
+      }
+    }
+
+    switch (opcode >>> 5) {
+    case 0: // BRK or nmi_irq
+      if (!goto) !(PCL = toUint8(PCL + 1)) ? (PCH = toUint8(PCH + 1)) : 0;
+    // nmi_irq:
+    if (goto == "nmi_irq") goto = null;
+    if (!goto) {
+      mem(S, 1, PCH, 1); S = toUint8(S - 1);
+      mem(S, 1, PCL, 1); S = toUint8(S - 1);
+      mem(S, 1, P | 32, 1); S = toUint8(S - 1);
+      // BRK/IRQ vector is $ffff, NMI vector is $fffa
+      PCL = mem(~1 - (nmi_irq & 4), ~0, 0, 0);
+      PCH = mem(~0 - (nmi_irq & 4), ~0, 0, 0);
+      nmi_irq = 0;
+      cycles = (cycles + 1);
+      break;
+    }
+
+    case 1: // JSR
+      if (!goto) {
+        result = read_pc();
+        mem(S, 1, PCH, 1); S = toUint8(S - 1);
+        mem(S, 1, PCL, 1); S = toUint8(S - 1);
+        PCH = read_pc();
+        PCL = result;
+        break;
+      }
+
+    case 2: // RTI
+      if (!goto) {
+        P = mem(S = toUint8(S + 1), 1, 0, 0) & 223;
+        PCL = mem(S = toUint8(S + 1), 1, 0, 0);
+        PCH = mem(S = toUint8(S + 1), 1, 0, 0);
+        break;
+      }
+
+    case 3: // RTS
+      if (!goto) {
+        PCL = mem(S = toUint8(S + 1), 1, 0, 0);
+        PCH = mem(S = toUint8(S + 1), 1, 0, 0);
+        !(PCL = toUint8(PCL + 1)) ? (PCH = toUint8(PCH + 1)) : 0;
+        break;
+      }
+    }
+
+    if (!goto) cycles = (cycles + 4);
+    if (!goto) break;
+
+  case 16: // BPL, BMI, BVC, BVS, BCC, BCS, BNE, BEQ
+    if (!goto) {
+      read_pc();
+      if (DBG) {
+        printl("P: " + P);
+        printl("opcode >>> 6 & 3: " + (opcode >>> 6 & 3));
+        printl("mask: " + mask[opcode >>> 6 & 3]);
+      }
+      // printl("check: " + ((!toUint8(P & mask[toUint8(opcode >>> 6) & 3])).tointeger() ^ opcode / 32 & 1));
+      if ((!toUint8(P & mask[toUint8(opcode >>> 6) & 3])).tointeger() ^ opcode / 32 & 1) {
+        if (DBG) printl("check: 1");
+        // printl("cross: " + (toUint8(PCL + toInt8(val) >>> 8)));
+        if (cross = toUint8(PCL + toInt8(val) >>> 8)) {
+          PCH = toUint8(PCH + cross);
+          cycles = (cycles + 1);
+        }
+        cycles = (cycles + 1), PCL = toUint8(PCL + toInt8(val));
+      }
+      break;
+    }
+
+  case 8:
+  case 8 + 16:
+
+    if (!goto) {switch (opcode = toUint8(opcode >>> 4)) {
+    case 0: // PHP
+      mem(S, 1, P | 48, 1); S = toUint8(S - 1);
+      cycles = (cycles + 1);
+      break;
+
+    case 2: // PLP
+      P = toUint8(mem(S = toUint8(S + 1), 1, 0, 0) & ~16);
+      cycles = (cycles + 2);
+      break;
+
+    case 4: // PHA
+      mem(S, 1, A, 1); S = toUint8(S - 1);
+      cycles = (cycles + 1);
+      break;
+
+    case 6: // PLA
+      set_nz(A = mem(S = toUint8(S + 1), 1, 0, 0));
+      cycles = (cycles + 2);
+      break;
+
+    case 8: // DEY
+      set_nz(Y = toUint8(Y - 1));
+      break;
+
+    case 9: // TYA
+      set_nz(A = Y);
+      break;
+
+    case 10: // TAY
+      set_nz(Y = A);
+      break;
+
+    case 12: // INY
+      set_nz(Y = toUint8(Y + 1));
+      break;
+
+    case 14: // INX
+      set_nz(X = toUint8(X + 1));
+      break;
+
+    default: // CLC, SEC, CLI, SEI, CLV, CLD, SED
+      P = toUint8(P & ~mask[opcode + 3] | mask[opcode + 4]);
+      break;
+    }
+    break;
+  }
+
+  case 10:
+  case 10 + 16:
+
+    if (!goto) {
+      switch (opcode >>> 4) {
+        case 8: // TXA
+          set_nz(A = X);
+          break;
+
+        case 9: // TXS
+          S = X;
+          break;
+
+        case 10: // TAX
+          set_nz(X = A);
+          break;
+
+        case 11: // TSX
+          set_nz(X = S);
+          break;
+
+        case 12: // DEX
+          set_nz(X = toUint8(X - 1));
+          break;
+
+        case 14: // NOP
+          break;
+
+        default: // ASL/ROL/LSR/ROR A
+          nomem = 1;
+          val = A;
+          goto <- "nomemop";
+      }
+      if (!goto) break;
+  }
+
+  case 1: // X-indexed, indirect
+    if (!goto) {
+      read_pc();
+      val = toUint8(val + X);
+      addr_lo = mem(val, 0, 0, 0);
+      addr_hi = mem(val + 1, 0, 0, 0);
+      cycles = (cycles + 4);
+      goto <- "opcode";
+    }
+
+  case 4: case 5: case 6: // Zeropage
+    if (!goto) {
+      addr_lo = read_pc();
+      addr_hi = 0;
+      cycles = (cycles + 1);
+      goto <- "opcode";
+    }
+
+  case 2: case 9: // Immediate
+    if (!goto) {
+      read_pc();
+      nomem = 1;
+      goto <- "nomemop";
+    }
+
+  case 12: case 13: case 14: // Absolute
+    if (!goto) {
+      addr_lo = read_pc(); // 7
+      addr_hi = read_pc(); // 32
+      cycles = (cycles + 2);
+      goto <- "opcode";
+    }
+
+  case 17: // Zeropage, Y-indexed
+    if (!goto) {
+      addr_lo = mem(read_pc(), 0, 0, 0);
+      addr_hi = mem(val + 1, 0, 0, 0);
+      val = Y;
+      tmp = opcode == 145; // STA always uses extra cycle.
+      cycles = (cycles + 1);
+      goto <- "cross";
+    }
+
+  case 20: case 21: case 22: // Zeropage, X-indexed
+    if (!goto) {
+      addr_lo = read_pc() + ((opcode & 214) == 150 ? Y : X); // LDX/STX use Y
+      addr_hi = 0;
+      cycles = (cycles + 2);
+      goto <- "opcode";
+    }
+
+  case 25: // Absolute, Y-indexed.
+    if (!goto) {
+      addr_lo = read_pc(); // 251
+      addr_hi = read_pc(); // 2
+      val = Y;
+      tmp = opcode == 153; // STA always uses extra cycle.
+      goto <- "cross";
+    }
+
+  case 28: case 29: case 30: // Absolute, X-indexed.
+    if (!goto) {
+      addr_lo = read_pc(); // 215
+      addr_hi = read_pc(); // 7
+      val = opcode == 190 ? Y : X; // LDX uses Y
+      tmp = opcode == 157 ||      // STA always uses extra cycle.
+                              // ASL/ROL/LSR/ROR/INC/DEC all uses extra cycle.
+            opcode % 16 == 14 && opcode != 190;
+      // fallthrough
+    }
+  // cross:
+  if (goto == "cross") goto = null;
+  if (!goto) {
+    cross = (addr_lo + val > 255).tointeger();
+    addr_hi = toUint8(addr_hi + cross);
+    addr_lo = toUint8(addr_lo + val);
+    // printl(cycles + " + 2 + " + tmp.tointeger() + " | " + cross);
+    // local cycles_pre = cycles;
+    cycles = (cycles + (2 + tmp.tointeger() | cross));
+    // printl("cycles @cross: " + cycles_pre + ", " + cycles);
+    // fallthrough
+  }
+
+  // opcode:
+  if (goto == "opcode") goto = null;
+  if (!goto) {
+    // Read from the given address into `val` for convenience below, except
+    // for the STA/STX/STY instructions, and JMP.
+    if ((opcode & 224) != 128 && opcode != 76) {
+      local val_pre = val; // 32
+      // val = mem(7, 32, 0, 0);
+      val = mem(addr_lo, addr_hi, 0, 0); // is 0, should be 32
+      if (DBG) printl("1: " + val_pre + ", 2: " + val);
+    }
+  }
+
+  // nomemop:
+  if (goto == "nomemop") goto = null;
+  if (!goto) {switch (opcode & 243) { // 64
+    case 1:
+    case 1 + 16:
+    set_nz(A = toUint8(A | val));  // ORA
+    break;
+    case 33:
+    case 33 + 16:
+    set_nz(A = A & val); // AND
+    break;
+    case 65:
+    case 65 + 16:
+    set_nz(A = toUint8(A ^ val)); // EOR
+
+    break;
+    case 225:
+    case 225 + 16:
+    // SBC
+      val = toUint8(~val);
+      goto <- "add";
+
+    case 97:
+    case 97 + 16:
+    // ADC
+    // add:
+    if (goto == "add") goto = null;
+    if (!goto) {
+      sum = A + val + (P & 1);
+      P = toUint8(P & ~65 | (sum > 255).tointeger() | (~(A ^ val) & (val ^ sum) & 128) / 2);
+      set_nz(A = toUint8(sum));
+      break;
+    }
+
+    case 2:
+    case 2 + 16:
+    // ASL
+    if (!goto) {
+      result = toUint8(val * 2);
+      P = P & 254 | val / 128;
+      goto <- "memop";
+    }
+
+    case 34:
+    case 34 + 16:
+    // ROL
+    if (!goto) {
+      result = toUint8(val * 2 | P & 1);
+      P = P & 254 | val / 128;
+      goto <- "memop";
+    }
+
+    case 66:
+    case 66 + 16:
+    // LSR
+    if (!goto) {
+      result = toUint8(val / 2);
+      P = P & 254 | val & 1;
+      goto <- "memop";
+    }
+
+    case 98:
+    case 98 + 16:
+    // ROR
+    if (!goto) {
+      result = toUint8(val / 2 | toUint8(P << 7));
+      P = P & 254 | val & 1;
+      goto <- "memop";
+    }
+
+    case 194:
+    case 194 + 16:
+    // DEC
+    if (!goto) {
+      result = toUint8(val - 1);
+      goto <- "memop";
+    }
+
+    case 226:
+    case 226 + 16:
+    // INC
+      if (!goto) result = toUint8(val + 1);
+      // fallthrough
+
+    // memop:
+    if (goto == "memop") goto = null;
+    if (!goto) {
+      set_nz(result);
+      // Write result to A or back to memory.
+      nomem ? A = result : (cycles = (cycles + 2), mem(addr_lo, addr_hi, result, 1));
+      break;
+    }
+
+    case 32: // BIT
+      P = toUint8(P & 61 | val & 192 | (!(A & val)).tointeger() * 2);
+      break;
+
+    case 64: // JMP
+      PCL = addr_lo; // 87
+      PCH = addr_hi; // 128
+      cycles = (cycles - 1);
+      break;
+
+    case 96: // JMP indirect
+      PCL = val;
+      PCH = mem(addr_lo + 1, addr_hi, 0, 0);
+      cycles = (cycles + 1);
+
+    break;
+    case 160:
+    case 160 + 16:
+    set_nz(Y = toUint8(val)); // LDY
+    break;
+    case 161:
+    case 161 + 16:
+    set_nz(A = toUint8(val)); // LDA
+    break;
+    case 162:
+    case 162 + 16:
+    set_nz(X = toUint8(val)); // LDX
+
+    break;
+    case 128:
+    case 128 + 16:
+    result = Y; goto <- "store"; // STY
+    if (!goto) break;
+    case 129:
+    case 129 + 16:
+    if (!goto) {result = A; goto <- "store";} // STA
+    if (!goto) break;
+    case 130:
+    case 130 + 16:
+    if (!goto) result = X;             // STX
+
+    // store:
+    if (goto == "store") goto = null;
+    if (!goto) {
+      mem(addr_lo, addr_hi, result, 1);
+      break;
+    }
+    case 192:
+    case 192 + 16:
+    result = Y; goto <- "cmp"; // CPY
+    if (!goto) break;
+    case 193:
+    case 193 + 16:
+    if (!goto) {result = A; goto <- "cmp";} // CMP
+    if (!goto) break;
+    case 224:
+    case 224 + 16:
+    if (!goto) result = X;           // CPX
+    // cmp:
+    if (goto == "cmp") goto = null;
+    if (!goto) {
+      P = toUint8(P & ~1 | (result >= val).tointeger());
+      set_nz(toUint8(result - val));
+      break;
+    }
+    }}
+  }
+
+  // Update PPU, which runs 3 times faster than CPU. Each CPU instruction
+  // takes at least 2 cycles.
+  if (DBG) printl("PPU start cycle: " + toUint8(cycles * 3 + 6));
+  for (tmp = toUint8(cycles * 3 + 6); tmp--;) {
+
+    // printl("Dot: " + dot + ", Scany: " + scany + ", Color: " + color + ", Palette: " + palette);
+    // printl("Dot: " + dot + ", Scany: " + scany + ", BG/Sprites: " + (ppumask & 24));
+
+    if (ppumask & 24) { // If background or sprites are enabled.
+      // printl("UPDATING FRAMEBUFFER");
+      // if (scany < 240 && ((scany % pixel_size == 0 && dot % pixel_size == 0) || ppumask & 16)) {
+      if (scany < 240) {
+        if (dot < 256 || dot > 319) {
+          switch (dot & 7) {
+          case 1: // Read nametable byte.
+            ntb = get_nametable_byte(V);
+            break;
+          case 3: // Read attribute byte.
+            atb = toUint16((get_nametable_byte(toUint16(960 | V & 3072 | V >> 4 & 56 |
+                                      V / 4 & 7)) >>
+                  (V >> 5 & 2 | V / 2 & 1) * 2) %
+                  4 * 0x5555);
+            break;
+          case 5: // Read pattern table low byte.
+            ptb_lo = get_chr_byte(ppuctrl << 8 & 4096 | ntb << 4 | V >> 12);
+            break;
+          case 7: // Read pattern table high byte.
+            ptb_hi = get_chr_byte(ppuctrl << 8 & 4096 | ntb << 4 | V >> 12 | 8);
+            // Increment horizontal VRAM read address.
+            V = toUint16((V & 31) == 31 ? V & ~31 ^ 1024 : V + 1);
+            break;
+          }
+
+          // Draw a pixel to the framebuffer.
+          if (dot < 256) {
+            // Read color and palette from shift registers.
+            local color = toUint8(shift_hi >>> 14 - fine_x & 2 |
+                            shift_lo >>> 15 - fine_x & 1),
+                    palette = toUint8(shift_at >>> 28 - fine_x * 2 & 12);
+
+            // If sprites are enabled.
+            if (ppumask & 16)
+              // Loop through all sprites.
+              for (local sprite = 0; sprite < 256; sprite += 4) {
+                local sprite_h = ppuctrl & 32 ? 16 : 8,
+                      sprite_x = toUint16(dot - oam[sprite + 3]),
+                      sprite_y = toUint16(scany - oam[sprite] - 1),
+                      sx = toUint16(sprite_x ^ (oam[sprite + 2] & 64 ? 0 : 7)),
+                      sy = toUint16(sprite_y ^ (oam[sprite + 2] & 128 ? sprite_h - 1 : 0));
+                if (sprite_x < 8 && sprite_y < sprite_h) {
+                  local sprite_tile = oam[sprite + 1],
+                        sprite_addr = toUint16(ppuctrl & 32
+                                            // 8x16 sprites
+                                            ? sprite_tile % 2 << 12 |
+                                                  (sprite_tile & 65534) << 4 |
+                                                  (sy & 8) * 2 | sy & 7
+                                            // 8x8 sprites
+                                            : (ppuctrl & 8) << 9 |
+                                                  sprite_tile << 4 | sy & 7),
+                        sprite_color = toUint8(
+                              get_chr_byte(sprite_addr + 8) >>> sx << 1 & 2 |
+                              get_chr_byte(sprite_addr) >>> sx & 1);
+                  // Only draw sprite if color is not 0 (transparent)
+                  if (sprite_color) {
+                    // Don't draw sprite if BG has priority.
+                    if (!(oam[sprite + 2] & 32 && color)) {
+                      color = sprite_color;
+                      palette = toUint8(16 | oam[sprite + 2] * 4 & 12);
+                    }
+                    // Maybe set sprite0 hit flag.
+                    sprite == 0 &&color ? ppustatus = toUint8(ppustatus | 64) : 0;
+                    break; // goto found_sprite;
+                  }
+                }
+                // if (scany % pixel_size != 0 || dot % pixel_size != 0) break;
+              }
+          // found_sprite:
+
+            // Write pixel to framebuffer. Always use palette 0 for color 0.
+            // BGR565 palette is used instead of RGBA32 to reduce source code
+            // size.
+            frame_buffer[scany * 256 + dot] = fb_pixels[palette_ram[color ? palette | color : 0]];
+          }
+
+          // Update shift registers every cycle.
+          if (dot < 336) {
+            shift_hi = toUint16(shift_hi * 2);
+            shift_lo = toUint16(shift_lo * 2);
+            shift_at = toUint16(shift_at * 4);
+          }
+
+          // Reload shift registers every 8 cycles.
+          if (dot % 8 == 7) {
+            shift_hi = toUint16(shift_hi | ptb_hi);
+            shift_lo = toUint16(shift_lo | ptb_lo);
+            shift_at = toUint16(shift_at | atb);
+          }
+        }
+
+        // Increment vertical VRAM address.
+        if (dot == 256) {
+          V = toUint16(((V & 7 << 12) != 7 << 12 ? V + 4096
+                          : (V & 992) == 928       ? V & 35871 ^ 2048
+                          : (V & 992) == 992       ? V & 35871
+                                            : V & 35871 | V + 32 & 992) &
+                            // Reset horizontal VRAM address to T value.
+                            ~1055 |
+                        T & 1055);
+        }
+        if (dot == 261 && mmc3_irq && !mmc3_latch) nmi_irq = 1;
+        mmc3_latch = toUint8(mmc3_latch - 1);
+      }
+
+      // Reset vertical VRAM address to T value.
+      scany == 261 &&dot > 279 &&dot < 305 ? V = toUint16(V & 33823 | T & 31712) : 0;
+    }
+
+    if (scany == 241 && dot == 1) {
+      // If NMI is enabled, trigger NMI.
+      ppuctrl & 128 ? (nmi_irq = 4) : 0;
+      ppustatus = toUint8(ppustatus | 128);
+
+      ::frame_ready <- true;
+
+      if (DBG) printl("RENDERING FRAME!!");
+
+    }
+
+    // Clear ppustatus.
+    scany == 261 &&dot == 1 ? ppustatus = 0 : 0;
+
+    // Increment to next dot/scany. 341 dots per scanline, 262 scanlines per
+    // frame. Scanline 261 is represented as -1.
+    if (++dot == 341) {
+      dot = 0;
+      scany = scany + 1;
+      scany = scany % 262;
+    }
+  }
+};
 
 ::smolnes_main <- function (rom) {
   // SDL_RWread(SDL_RWFromFile(argv[1], "rb"), rombuf, 1024 * 1024, 1);
@@ -351,619 +950,10 @@ function set_nz(val, src) {
   PCL = mem(~3, ~0, 0, 0);
   PCH = mem(~2, ~0, 0, 0);
 
-  ::total_cycles <- 0;
-
-  // ::cpu_interval <- ppmod.interval(function () {
-    // printl("Total cycles: " + total_cycles);
   ppmod.interval(function () {
-  for (local _i = 0; _i < cycles_per_tick; _i ++) {
-  ppmod.runscript("worldspawn", function () {
-    total_cycles++;
-
-    // if (total_cycles == 49295) {
-    //   // printl("Reached cycle " + total_cycles);
-    //   activator.Destroy();
-    //   break;
-    // }
-
-    cycles = nomem = 0;
-
-    if (nmi_irq) goto <- "nmi_irq";
-
-    if (!goto) {
-      opcode = read_pc(); // 76
-      // printl(opcode);
-    } else {
-      // printl(goto);
-    }
-
-    if (goto == "nmi_irq") {
-      goto = null;
-      mem(S, 1, PCH, 1); S = toUint8(S - 1);
-      mem(S, 1, PCL, 1); S = toUint8(S - 1);
-      mem(S, 1, P | 32, 1); S = toUint8(S - 1);
-      // BRK/IRQ vector is $ffff, NMI vector is $fffa
-      PCL = mem(~1 - (nmi_irq & 4), ~0, 0, 0);
-      PCH = mem(~0 - (nmi_irq & 4), ~0, 0, 0);
-      nmi_irq = 0;
-      cycles = (cycles + 1);
-      cycles = (cycles + 4);
-    } else switch (opcode & 31) { // 13
-    case 0:
-      if (!goto) {
-        if (opcode & 128) { // LDY/CPY/CPX imm
-          read_pc();
-          nomem = 1;
-          goto <- "nomemop";
-        }
-      }
-
-      switch (opcode >>> 5) {
-      case 0: // BRK or nmi_irq
-        if (!goto) !(PCL = toUint8(PCL + 1)) ? (PCH = toUint8(PCH + 1)) : 0;
-      // nmi_irq:
-      if (goto == "nmi_irq") goto = null;
-      if (!goto) {
-        mem(S, 1, PCH, 1); S = toUint8(S - 1);
-        mem(S, 1, PCL, 1); S = toUint8(S - 1);
-        mem(S, 1, P | 32, 1); S = toUint8(S - 1);
-        // BRK/IRQ vector is $ffff, NMI vector is $fffa
-        PCL = mem(~1 - (nmi_irq & 4), ~0, 0, 0);
-        PCH = mem(~0 - (nmi_irq & 4), ~0, 0, 0);
-        nmi_irq = 0;
-        cycles = (cycles + 1);
-        break;
-      }
-
-      case 1: // JSR
-        if (!goto) {
-          result = read_pc();
-          mem(S, 1, PCH, 1); S = toUint8(S - 1);
-          mem(S, 1, PCL, 1); S = toUint8(S - 1);
-          PCH = read_pc();
-          PCL = result;
-          break;
-        }
-
-      case 2: // RTI
-        if (!goto) {
-          P = mem(S = toUint8(S + 1), 1, 0, 0) & 223;
-          PCL = mem(S = toUint8(S + 1), 1, 0, 0);
-          PCH = mem(S = toUint8(S + 1), 1, 0, 0);
-          break;
-        }
-
-      case 3: // RTS
-        if (!goto) {
-          PCL = mem(S = toUint8(S + 1), 1, 0, 0);
-          PCH = mem(S = toUint8(S + 1), 1, 0, 0);
-          !(PCL = toUint8(PCL + 1)) ? (PCH = toUint8(PCH + 1)) : 0;
-          break;
-        }
-      }
-
-      if (!goto) cycles = (cycles + 4);
-      if (!goto) break;
-
-    case 16: // BPL, BMI, BVC, BVS, BCC, BCS, BNE, BEQ
-      if (!goto) {
-        read_pc();
-        if (DBG) {
-          printl("P: " + P);
-          printl("opcode >>> 6 & 3: " + (opcode >>> 6 & 3));
-          printl("mask: " + mask[opcode >>> 6 & 3]);
-        }
-        // printl("check: " + ((!toUint8(P & mask[toUint8(opcode >>> 6) & 3])).tointeger() ^ opcode / 32 & 1));
-        if ((!toUint8(P & mask[toUint8(opcode >>> 6) & 3])).tointeger() ^ opcode / 32 & 1) {
-          if (DBG) printl("check: 1");
-          // printl("cross: " + (toUint8(PCL + toInt8(val) >>> 8)));
-          if (cross = toUint8(PCL + toInt8(val) >>> 8)) {
-            PCH = toUint8(PCH + cross);
-            cycles = (cycles + 1);
-          }
-          cycles = (cycles + 1), PCL = toUint8(PCL + toInt8(val));
-        }
-        break;
-      }
-
-    case 8:
-    case 8 + 16:
-
-      if (!goto) {switch (opcode = toUint8(opcode >>> 4)) {
-      case 0: // PHP
-        mem(S, 1, P | 48, 1); S = toUint8(S - 1);
-        cycles = (cycles + 1);
-        break;
-
-      case 2: // PLP
-        P = toUint8(mem(S = toUint8(S + 1), 1, 0, 0) & ~16);
-        cycles = (cycles + 2);
-        break;
-
-      case 4: // PHA
-        mem(S, 1, A, 1); S = toUint8(S - 1);
-        cycles = (cycles + 1);
-        break;
-
-      case 6: // PLA
-        set_nz(A = mem(S = toUint8(S + 1), 1, 0, 0), "PLA");
-        cycles = (cycles + 2);
-        break;
-
-      case 8: // DEY
-        set_nz(Y = toUint8(Y - 1), "DEY");
-        break;
-
-      case 9: // TYA
-        set_nz(A = Y, "TYA");
-        break;
-
-      case 10: // TAY
-        set_nz(Y = A, "TAY");
-        break;
-
-      case 12: // INY
-        set_nz(Y = toUint8(Y + 1), "INY");
-        break;
-
-      case 14: // INX
-        set_nz(X = toUint8(X + 1), "INX");
-        break;
-
-      default: // CLC, SEC, CLI, SEI, CLV, CLD, SED
-        P = toUint8(P & ~mask[opcode + 3] | mask[opcode + 4]);
-        break;
-      }
-      break;
-    }
-
-    case 10:
-    case 10 + 16:
-
-      if (!goto) {
-        switch (opcode >>> 4) {
-          case 8: // TXA
-            set_nz(A = X, "TXA");
-            break;
-
-          case 9: // TXS
-            S = X;
-            break;
-
-          case 10: // TAX
-            set_nz(X = A, "TAX");
-            break;
-
-          case 11: // TSX
-            set_nz(X = S, "TSX");
-            break;
-
-          case 12: // DEX
-            set_nz(X = toUint8(X - 1), "DEX");
-            break;
-
-          case 14: // NOP
-            break;
-
-          default: // ASL/ROL/LSR/ROR A
-            nomem = 1;
-            val = A;
-            goto <- "nomemop";
-        }
-        if (!goto) break;
-    }
-
-    case 1: // X-indexed, indirect
-      if (!goto) {
-        read_pc();
-        val = toUint8(val + X);
-        addr_lo = mem(val, 0, 0, 0);
-        addr_hi = mem(val + 1, 0, 0, 0);
-        cycles = (cycles + 4);
-        goto <- "opcode";
-      }
-
-    case 4: case 5: case 6: // Zeropage
-      if (!goto) {
-        addr_lo = read_pc();
-        addr_hi = 0;
-        cycles = (cycles + 1);
-        goto <- "opcode";
-      }
-
-    case 2: case 9: // Immediate
-      if (!goto) {
-        read_pc();
-        nomem = 1;
-        goto <- "nomemop";
-      }
-
-    case 12: case 13: case 14: // Absolute
-      if (!goto) {
-        addr_lo = read_pc(); // 7
-        addr_hi = read_pc(); // 32
-        cycles = (cycles + 2);
-        goto <- "opcode";
-      }
-
-    case 17: // Zeropage, Y-indexed
-      if (!goto) {
-        addr_lo = mem(read_pc(), 0, 0, 0);
-        addr_hi = mem(val + 1, 0, 0, 0);
-        val = Y;
-        tmp = opcode == 145; // STA always uses extra cycle.
-        cycles = (cycles + 1);
-        goto <- "cross";
-      }
-
-    case 20: case 21: case 22: // Zeropage, X-indexed
-      if (!goto) {
-        addr_lo = read_pc() + ((opcode & 214) == 150 ? Y : X); // LDX/STX use Y
-        addr_hi = 0;
-        cycles = (cycles + 2);
-        goto <- "opcode";
-      }
-
-    case 25: // Absolute, Y-indexed.
-      if (!goto) {
-        addr_lo = read_pc(); // 251
-        addr_hi = read_pc(); // 2
-        val = Y;
-        tmp = opcode == 153; // STA always uses extra cycle.
-        goto <- "cross";
-      }
-
-    case 28: case 29: case 30: // Absolute, X-indexed.
-      if (!goto) {
-        addr_lo = read_pc(); // 215
-        addr_hi = read_pc(); // 7
-        val = opcode == 190 ? Y : X; // LDX uses Y
-        tmp = opcode == 157 ||      // STA always uses extra cycle.
-                                // ASL/ROL/LSR/ROR/INC/DEC all uses extra cycle.
-              opcode % 16 == 14 && opcode != 190;
-        // fallthrough
-      }
-    // cross:
-    if (goto == "cross") goto = null;
-    if (!goto) {
-      cross = (addr_lo + val > 255).tointeger();
-      addr_hi = toUint8(addr_hi + cross);
-      addr_lo = toUint8(addr_lo + val);
-      // printl(cycles + " + 2 + " + tmp.tointeger() + " | " + cross);
-      // local cycles_pre = cycles;
-      cycles = (cycles + (2 + tmp.tointeger() | cross));
-      // printl("cycles @cross: " + cycles_pre + ", " + cycles);
-      // fallthrough
-    }
-
-    // opcode:
-    if (goto == "opcode") goto = null;
-    if (!goto) {
-      // Read from the given address into `val` for convenience below, except
-      // for the STA/STX/STY instructions, and JMP.
-      if ((opcode & 224) != 128 && opcode != 76) {
-        local val_pre = val; // 32
-        // val = mem(7, 32, 0, 0);
-        val = mem(addr_lo, addr_hi, 0, 0); // is 0, should be 32
-        if (DBG) printl("1: " + val_pre + ", 2: " + val);
-      }
-    }
-
-    // nomemop:
-    if (goto == "nomemop") goto = null;
-    if (!goto) {switch (opcode & 243) { // 64
-      case 1:
-      case 1 + 16:
-      set_nz(A = toUint8(A | val), "ORA");  // ORA
-      break;
-      case 33:
-      case 33 + 16:
-      set_nz(A = A & val, "AND"); // AND
-      break;
-      case 65:
-      case 65 + 16:
-      set_nz(A = toUint8(A ^ val), "EOR"); // EOR
-
-      break;
-      case 225:
-      case 225 + 16:
-      // SBC
-        val = toUint8(~val);
-        goto <- "add";
-
-      case 97:
-      case 97 + 16:
-      // ADC
-      // add:
-      if (goto == "add") goto = null;
-      if (!goto) {
-        sum = A + val + (P & 1);
-        P = toUint8(P & ~65 | (sum > 255).tointeger() | (~(A ^ val) & (val ^ sum) & 128) / 2);
-        set_nz(A = toUint8(sum), "ADC");
-        break;
-      }
-
-      case 2:
-      case 2 + 16:
-      // ASL
-      if (!goto) {
-        result = toUint8(val * 2);
-        P = P & 254 | val / 128;
-        goto <- "memop";
-      }
-
-      case 34:
-      case 34 + 16:
-      // ROL
-      if (!goto) {
-        result = toUint8(val * 2 | P & 1);
-        P = P & 254 | val / 128;
-        goto <- "memop";
-      }
-
-      case 66:
-      case 66 + 16:
-      // LSR
-      if (!goto) {
-        result = toUint8(val / 2);
-        P = P & 254 | val & 1;
-        goto <- "memop";
-      }
-
-      case 98:
-      case 98 + 16:
-      // ROR
-      if (!goto) {
-        result = toUint8(val / 2 | toUint8(P << 7));
-        P = P & 254 | val & 1;
-        goto <- "memop";
-      }
-
-      case 194:
-      case 194 + 16:
-      // DEC
-      if (!goto) {
-        result = toUint8(val - 1);
-        goto <- "memop";
-      }
-
-      case 226:
-      case 226 + 16:
-      // INC
-        if (!goto) result = toUint8(val + 1);
-        // fallthrough
-
-      // memop:
-      if (goto == "memop") goto = null;
-      if (!goto) {
-        set_nz(result, "MEMOP");
-        // Write result to A or back to memory.
-        nomem ? A = result : (cycles = (cycles + 2), mem(addr_lo, addr_hi, result, 1));
-        break;
-      }
-
-      case 32: // BIT
-        P = toUint8(P & 61 | val & 192 | (!(A & val)).tointeger() * 2);
-        break;
-
-      case 64: // JMP
-        PCL = addr_lo; // 87
-        PCH = addr_hi; // 128
-        cycles = (cycles - 1);
-        break;
-
-      case 96: // JMP indirect
-        PCL = val;
-        PCH = mem(addr_lo + 1, addr_hi, 0, 0);
-        cycles = (cycles + 1);
-
-      break;
-      case 160:
-      case 160 + 16:
-      set_nz(Y = toUint8(val), "LDY"); // LDY
-      break;
-      case 161:
-      case 161 + 16:
-      set_nz(A = toUint8(val), "LDA"); // LDA
-      break;
-      case 162:
-      case 162 + 16:
-      set_nz(X = toUint8(val), "LDX"); // LDX
-
-      break;
-      case 128:
-      case 128 + 16:
-      result = Y; goto <- "store"; // STY
-      if (!goto) break;
-      case 129:
-      case 129 + 16:
-      if (!goto) {result = A; goto <- "store";} // STA
-      if (!goto) break;
-      case 130:
-      case 130 + 16:
-      if (!goto) result = X;             // STX
-
-      // store:
-      if (goto == "store") goto = null;
-      if (!goto) {
-        mem(addr_lo, addr_hi, result, 1);
-        break;
-      }
-      case 192:
-      case 192 + 16:
-      result = Y; goto <- "cmp"; // CPY
-      if (!goto) break;
-      case 193:
-      case 193 + 16:
-      if (!goto) {result = A; goto <- "cmp";} // CMP
-      if (!goto) break;
-      case 224:
-      case 224 + 16:
-      if (!goto) result = X;           // CPX
-      // cmp:
-      if (goto == "cmp") goto = null;
-      if (!goto) {
-        P = toUint8(P & ~1 | (result >= val).tointeger());
-        set_nz(toUint8(result - val), "CMP");
-        break;
-      }
-      }}
-    }
-
-    // Update PPU, which runs 3 times faster than CPU. Each CPU instruction
-    // takes at least 2 cycles.
-    if (DBG) printl("PPU start cycle: " + toUint8(cycles * 3 + 6));
-    for (tmp = toUint8(cycles * 3 + 6); tmp--;) {
-
-      // printl("Dot: " + dot + ", Scany: " + scany + ", Color: " + color + ", Palette: " + palette);
-      // printl("Dot: " + dot + ", Scany: " + scany + ", BG/Sprites: " + (ppumask & 24));
-
-      if (ppumask & 24) { // If background or sprites are enabled.
-        // printl("UPDATING FRAMEBUFFER");
-        if (scany < 240) {
-          if (dot < 256 || dot > 319) {
-            switch (dot & 7) {
-            case 1: // Read nametable byte.
-              ntb = get_nametable_byte(V);
-              break;
-            case 3: // Read attribute byte.
-              atb = toUint16((get_nametable_byte(toUint16(960 | V & 3072 | V >>> 4 & 56 |
-                                        V / 4 & 7)) >>>
-                    (V >>> 5 & 2 | V / 2 & 1) * 2) %
-                    4 * 0x5555);
-              break;
-            case 5: // Read pattern table low byte.
-              ptb_lo = get_chr_byte(ppuctrl << 8 & 4096 | ntb << 4 | V >>> 12);
-              break;
-            case 7: // Read pattern table high byte.
-              ptb_hi =
-                  get_chr_byte(ppuctrl << 8 & 4096 | ntb << 4 | V >>> 12 | 8);
-              // Increment horizontal VRAM read address.
-              V = toUint16((V & 31) == 31 ? V & ~31 ^ 1024 : V + 1);
-              break;
-            }
-
-            // Draw a pixel to the framebuffer.
-            if (scany < 240 && dot < 256) {
-              // Read color and palette from shift registers.
-              local color = toUint8(shift_hi >>> 14 - fine_x & 2 |
-                              shift_lo >>> 15 - fine_x & 1),
-                      palette = toUint8(shift_at >>> 28 - fine_x * 2 & 12);
-
-              // If sprites are enabled.
-              if (ppumask & 16)
-                // Loop through all sprites.
-                for (local sprite = 0; sprite < 256; sprite += 4) {
-                  local sprite_h = toUint16(ppuctrl & 32 ? 16 : 8),
-                          sprite_x = toUint16(dot - oam[sprite + 3]),
-                          sprite_y = toUint16(scany - oam[sprite] - 1),
-                          sx = toUint16(sprite_x ^ (oam[sprite + 2] & 64 ? 0 : 7)),
-                          sy = toUint16(sprite_y ^ (oam[sprite + 2] & 128 ? sprite_h - 1 : 0));
-                  if (sprite_x < 8 && sprite_y < sprite_h) {
-                    local sprite_tile = toUint16(oam[sprite + 1]),
-                            sprite_addr = toUint16(ppuctrl & 32
-                                              // 8x16 sprites
-                                              ? sprite_tile % 2 << 12 |
-                                                    (sprite_tile & ~1) << 4 |
-                                                    (sy & 8) * 2 | sy & 7
-                                              // 8x8 sprites
-                                              : (ppuctrl & 8) << 9 |
-                                                    sprite_tile << 4 | sy & 7),
-                            sprite_color = toUint16(
-                                get_chr_byte(sprite_addr + 8) >>> sx << 1 & 2 |
-                                get_chr_byte(sprite_addr) >>> sx & 1);
-                    // Only draw sprite if color is not 0 (transparent)
-                    if (sprite_color) {
-                      // Don't draw sprite if BG has priority.
-                      if (!(oam[sprite + 2] & 32 && color)) {
-                        color = toUint8(sprite_color);
-                        palette = toUint8(16 | oam[sprite + 2] * 4 & 12);
-                      }
-                      // Maybe set sprite0 hit flag.
-                      sprite == 0 &&color ? ppustatus = toUint8(ppustatus | 64) : 0;
-                      break; // goto found_sprite;
-                    }
-                  }
-                }
-            // found_sprite:
-
-              // Write pixel to framebuffer. Always use palette 0 for color 0.
-              // BGR565 palette is used instead of RGBA32 to reduce source code
-              // size.
-              frame_buffer[scany * 256 + dot] =
-                    ([25356, 34816, 39011, 30854, 24714, 4107,  106,   2311,
-                      2468,  2561,  4642,  6592,  20832, 0,     0,     0,
-                      44373, 49761, 55593, 51341, 43186, 18675, 434,   654,
-                      4939,  5058,  3074,  19362, 37667, 0,     0,     0,
-                      65535,    64716,  64497, 64342, 62331, 43932, 23612, 9465,
-                      1429,  1550,  20075, 36358, 52713, 16904, 0,     0,
-                      65535,    65207,  65113,  65083,  65053,  58911, 50814, 42620,
-                      40667, 40729, 48951, 53078, 61238, 44405])[palette_ram[color ? palette | color : 0]];
-            }
-
-            // Update shift registers every cycle.
-            if (dot < 336) {
-              shift_hi = toUint16(shift_hi * 2);
-              shift_lo = toUint16(shift_lo * 2);
-              shift_at = toUint16(shift_at * 4);
-            }
-
-            // Reload shift registers every 8 cycles.
-            if (dot % 8 == 7) {
-              shift_hi = toUint16(shift_hi | ptb_hi);
-              shift_lo = toUint16(shift_lo | ptb_lo);
-              shift_at = toUint16(shift_at | atb);
-            }
-          }
-
-          // Increment vertical VRAM address.
-          dot == 256 ? V = ((V & 7 << 12) != 7 << 12 ? V + 4096
-                            : (V & 992) == 928       ? V & 35871 ^ 2048
-                            : (V & 992) == 992       ? V & 35871
-                                              : V & 35871 | V + 32 & 992) &
-                              // Reset horizontal VRAM address to T value.
-                              ~1055 |
-                          T & 1055
-                    : 0;
-          if (dot == 261 && mmc3_irq && !mmc3_latch) nmi_irq = 1;
-          mmc3_latch = toUint8(mmc3_latch - 1);
-        }
-
-        // Reset vertical VRAM address to T value.
-        scany == 261 &&dot > 279 &&dot < 305 ? V = toUint16(V & 33823 | T & 31712) : 0;
-      }
-
-      if (scany == 241 && dot == 1) {
-        // If NMI is enabled, trigger NMI.
-        ppuctrl & 128 ? (nmi_irq = 4) : 0;
-        ppustatus = toUint8(ppustatus | 128);
-
-        // TODO: RENDER FRAME
-
-        if (DBG) printl("RENDERING FRAME!!");
-        // for (local i = 10; i < 20; i ++) {
-        //   for (local j = 10; j < 40; j ++) {
-        //     print(frame_buffer[i * 240 + j]);
-        //   }
-        //   print("\n");
-        // }
-
-      } else {
-        // printl("scany: " + scany + ", dot: " + dot);
-      }
-
-      // Clear ppustatus.
-      scany == 261 &&dot == 1 ? ppustatus = 0 : 0;
-
-      // Increment to next dot/scany. 341 dots per scanline, 262 scanlines per
-      // frame. Scanline 261 is represented as -1.
-      if (++dot == 341) {
-        dot = 0;
-        scany = scany + 1;
-        scany = scany % 262;
-      }
+    for (local _i = 0; _i < cycles_per_tick; _i ++) {
+      EntFire("worldspawn", "CallScriptFunction", "smolnes_main_loop");
     }
   });
-  }
-  });
+
 }
