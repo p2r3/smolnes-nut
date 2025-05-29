@@ -873,14 +873,14 @@ function set_nz(val) {
           if (dot < 336) {
             shift_hi = toUint16(shift_hi * 2);
             shift_lo = toUint16(shift_lo * 2);
-            shift_at = toUint16(shift_at * 4);
+            shift_at = shift_at * 4;
           }
 
           // Reload shift registers every 8 cycles.
           if (dot % 8 == 7) {
             shift_hi = toUint16(shift_hi | ptb_hi);
             shift_lo = toUint16(shift_lo | ptb_lo);
-            shift_at = toUint16(shift_at | atb);
+            shift_at = shift_at | atb;
           }
         }
 
