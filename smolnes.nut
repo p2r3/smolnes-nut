@@ -534,8 +534,8 @@ function handle_irq () {
 
   case 12: case 13: case 14: // Absolute
     if (!goto) {
-      addr_lo = read_pc(); // 7
-      addr_hi = read_pc(); // 32
+      addr_lo = read_pc();
+      addr_hi = read_pc();
       cycles = (cycles + 2);
       goto <- "opcode";
     }
@@ -560,8 +560,8 @@ function handle_irq () {
 
   case 25: // Absolute, Y-indexed.
     if (!goto) {
-      addr_lo = read_pc(); // 251
-      addr_hi = read_pc(); // 2
+      addr_lo = read_pc();
+      addr_hi = read_pc();
       val = Y;
       tmp = opcode == 153; // STA always uses extra cycle.
       goto <- "cross";
@@ -569,11 +569,11 @@ function handle_irq () {
 
   case 28: case 29: case 30: // Absolute, X-indexed.
     if (!goto) {
-      addr_lo = read_pc(); // 215
-      addr_hi = read_pc(); // 7
+      addr_lo = read_pc();
+      addr_hi = read_pc();
       val = opcode == 190 ? Y : X; // LDX uses Y
-      tmp = opcode == 157 ||      // STA always uses extra cycle.
-                              // ASL/ROL/LSR/ROR/INC/DEC all uses extra cycle.
+      tmp = opcode == 157 ||       // STA always uses extra cycle.
+                                   // ASL/ROL/LSR/ROR/INC/DEC all uses extra cycle.
             opcode % 16 == 14 && opcode != 190;
       // fallthrough
     }
@@ -593,7 +593,7 @@ function handle_irq () {
     // Read from the given address into `val` for convenience below, except
     // for the STA/STX/STY instructions, and JMP.
     if ((opcode & 224) != 128 && opcode != 76) {
-      val = mem(addr_lo, addr_hi, 0, 0); // is 0, should be 32
+      val = mem(addr_lo, addr_hi, 0, 0);
     }
   }
 
@@ -695,8 +695,8 @@ function handle_irq () {
       break;
 
     case 64: // JMP
-      PCL = addr_lo; // 87
-      PCH = addr_hi; // 128
+      PCL = addr_lo;
+      PCH = addr_hi;
       cycles = (cycles - 1);
       break;
 
@@ -729,7 +729,7 @@ function handle_irq () {
     if (!goto) break;
     case 130:
     case 130 + 16:
-    if (!goto) result = X;             // STX
+    if (!goto) result = X; // STX
 
     // store:
     if (goto == "store") goto = null;
@@ -747,7 +747,7 @@ function handle_irq () {
     if (!goto) break;
     case 224:
     case 224 + 16:
-    if (!goto) result = X;           // CPX
+    if (!goto) result = X; // CPX
     // cmp:
     if (goto == "cmp") goto = null;
     if (!goto) {
