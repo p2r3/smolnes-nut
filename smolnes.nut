@@ -36,12 +36,10 @@ function i8 (x) {
   return u >= 0x80 ? u - 0x100 : u;
 }
 
-// Whether to print debug information
-::DBG <- 0;
 // How many CPU cycles to simulate per game tick
 ::cycles_per_tick <- 128;
-// Size of individual pixels (higher = better perf, lower = better qual)
-::pixel_size <- 7;
+// Skip rendering this many pixels per axis (higher = better perf)
+::pixel_skip <- 7;
 // Used to simulate C "goto" behavior
 ::goto <- 0;
 const GOTO_NOMEMOP = 1;
@@ -78,8 +76,8 @@ const GOTO_CMP = 7;
 ::prgram <- array(8192, 0);                // PRG RAM (only used for some games)
 ::oam <- array(256, 0);                    // Object Attribute Memory (sprite RAM)
 ::mask <- [128, 64, 1, 2,           // Masks used in branch instructions
-          1,    0,  0, 1, 4, 0, 0, 4, 0,
-          0,    64, 0, 8, 0, 0, 8]; // Masks used in SE*/CL* instructions.
+           1,   0,  0, 1, 4, 0, 0, 4, 0,
+           0,   64, 0, 8, 0, 0, 8]; // Masks used in SE*/CL* instructions.
 ::keys <- 0;                              // Joypad shift register
 ::mirror <- 0;                            // Current mirroring mode
 ::mmc1_bits <- 0, ::mmc1_data <- 0, ::mmc1_ctrl <- 0;     // Mapper 1 (MMC1) registers
@@ -769,7 +767,8 @@ function handle_irq () {
   // takes at least 2 cycles.
   for (tmp = u8(cycles * 3 + 6); tmp--;) {
 
-    if (ppumask & 24) { // If background or sprites are enabled.
+    // If background or sprites are enabled, and we're not skipping this pixel
+    if (ppumask & 24 && ((scany % pixel_skip == 0 && dot % pixel_skip == 0) || ppumask & 16)) {
       if (scany < 240) {
         if (dot < 256 || dot > 319) {
           switch (dot & 7) {
@@ -830,9 +829,10 @@ function handle_irq () {
                     }
                     // Maybe set sprite0 hit flag.
                     sprite == 0 &&color ? ppustatus = u8(ppustatus | 64) : 0;
-                    break; // goto found_sprite;
+                    break;
                   }
                 }
+                if (scany % pixel_skip != 0 || dot % pixel_skip != 0) break;
               }
 
             // Write pixel to framebuffer. Always use palette 0 for color 0.
