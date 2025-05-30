@@ -158,11 +158,6 @@ function get_nametable_byte(a) {
 // If `write` is non-zero, writes `val` to the address `hi:lo`, otherwise reads
 // a value from the address `hi:lo`.
 function mem(lo, hi, val, write) {
-  lo = lo & 0xFF;
-  hi = hi & 0xFF;
-  val = val & 0xFF;
-  write = write & 0xFF;
-
   local a = (hi << 8 | lo) & 0xFFFF;
 
   switch (hi = u8(hi >>> 4)) {
@@ -245,8 +240,8 @@ function mem(lo, hi, val, write) {
         switch (rombuf[6] >>> 4) {
           case 7: // mapper 7
             mirror = !(val / 16);
-            prg[0] = val = u8(val % 8 * 2);
-            prg[1] = u8(val + 1);
+            prg[0] = val = val % 8 * 2;
+            prg[1] = val + 1;
             break;
 
           case 4: // mapper 4
@@ -277,7 +272,7 @@ function mem(lo, hi, val, write) {
 
               case 6:  // IRQ Latch
                 if (u8(~a & 1)) {
-                  mmc3_latch = u8(val);
+                  mmc3_latch = val;
                 }
                 break;
 
@@ -288,20 +283,20 @@ function mem(lo, hi, val, write) {
             break;
 
           case 3: // mapper 3
-            chr[0] = val = u8(val % 4 * 2);
-            chr[1] = u8(val + 1);
+            chr[0] = val = val % 4 * 2;
+            chr[1] = val + 1;
             break;
 
           case 2: // mapper 2
-            prg[0] = u8(val & 31);
+            prg[0] = val & 31;
             break;
 
           case 1: // mapper 1
             if (val & 128) {
               mmc1_bits = 5;
               mmc1_data = 0;
-              mmc1_ctrl = u8(mmc1_ctrl | 12);
-            } else if (mmc1_data = u8(mmc1_data / 2 | val << 4 & 16), !(mmc1_bits = u8(mmc1_bits - 1))) {
+              mmc1_ctrl = mmc1_ctrl | 12;
+            } else if (mmc1_data = mmc1_data / 2 | val << 4 & 16, !(mmc1_bits = u8(mmc1_bits - 1))) {
               mmc1_bits = 5;
               tmp = u8(a >>> 13);
               if (tmp == 4) {
@@ -315,12 +310,12 @@ function mem(lo, hi, val, write) {
                 prgbank = mmc1_data;
               }
 
-              chr[0] = u8(chrbank0 & ~!(mmc1_ctrl & 16));
-              chr[1] = u8(mmc1_ctrl & 16 ? chrbank1 : chrbank0 | 1);
+              chr[0] = chrbank0 & ~(!(mmc1_ctrl & 16)).tointeger();
+              chr[1] = mmc1_ctrl & 16 ? chrbank1 : chrbank0 | 1;
 
-              tmp = u8(mmc1_ctrl / 4 & 3);
-              prg[0] = u8(tmp == 2 ? 0 : tmp == 3 ? prgbank : prgbank & ~1);
-              prg[1] = u8(tmp == 2 ? prgbank : tmp == 3 ? rombuf[4] - 1 : prgbank | 1);
+              tmp = mmc1_ctrl / 4 & 3;
+              prg[0] = tmp == 2 ? 0 : tmp == 3 ? prgbank : prgbank & 254;
+              prg[1] = tmp == 2 ? prgbank : tmp == 3 ? rombuf[4] - 1 : prgbank | 1;
             }
         }
       }
@@ -347,8 +342,8 @@ function handle_irq () {
   mem(S, 1, PCL, 1); S = u8(S - 1);
   mem(S, 1, P | 32, 1); S = u8(S - 1);
   // BRK/IRQ vector is $ffff, NMI vector is $fffa
-  PCL = mem(~1 - (nmi_irq & 4), ~0, 0, 0);
-  PCH = mem(~0 - (nmi_irq & 4), ~0, 0, 0);
+  PCL = mem(254 - (nmi_irq & 4), 255, 0, 0);
+  PCH = mem(255 - (nmi_irq & 4), 255, 0, 0);
   nmi_irq = 0;
   cycles ++;
 }
@@ -374,8 +369,8 @@ function handle_irq () {
   }
 
   // Start at address in reset vector, at $FFFC.
-  PCL = mem(~3, ~0, 0, 0);
-  PCH = mem(~2, ~0, 0, 0);
+  PCL = mem(252, 255, 0, 0);
+  PCH = mem(253, 255, 0, 0);
 
 };
 
@@ -695,7 +690,7 @@ function handle_irq () {
     case 66 + 16:
     // LSR
     if (!goto) {
-      result = u8(val / 2);
+      result = val / 2;
       P = P & 254 | val & 1;
       goto = GOTO_MEMOP;
     }
@@ -704,7 +699,7 @@ function handle_irq () {
     case 98 + 16:
     // ROR
     if (!goto) {
-      result = u8(val / 2 | u8(P << 7));
+      result = u8(val / 2 | P << 7);
       P = P & 254 | val & 1;
       goto = GOTO_MEMOP;
     }
@@ -750,15 +745,15 @@ function handle_irq () {
     break;
     case 160:
     case 160 + 16:
-    set_nz(Y = u8(val)); // LDY
+    set_nz(Y = val); // LDY
     break;
     case 161:
     case 161 + 16:
-    set_nz(A = u8(val)); // LDA
+    set_nz(A = val); // LDA
     break;
     case 162:
     case 162 + 16:
-    set_nz(X = u8(val)); // LDX
+    set_nz(X = val); // LDX
 
     break;
     case 128:
@@ -793,7 +788,7 @@ function handle_irq () {
     // cmp:
     if (goto == GOTO_CMP) goto = 0;
     if (!goto) {
-      P = u8(P & ~1 | (result >= val).tointeger());
+      P = u8(P & 254 | (result >= val).tointeger());
       set_nz(u8(result - val));
       break;
     }
