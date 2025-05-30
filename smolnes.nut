@@ -36,10 +36,9 @@ function i8 (x) {
   return u >= 0x80 ? u - 0x100 : u;
 }
 
-// How many CPU cycles to simulate per game tick
-::cycles_per_tick <- 128;
-// Skip rendering this many pixels per axis (higher = better perf)
-::pixel_skip <- 7;
+// Skip rendering this many pixels per axis
+// 1 => don't skip, higher = better performance, bigger gaps
+::pixel_skip <- 1;
 // Used to simulate C "goto" behavior
 ::goto <- 0;
 const GOTO_NOMEMOP = 1;
@@ -354,7 +353,45 @@ function handle_irq () {
   cycles ++;
 }
 
-::smolnes_main_loop <- function () {
+/**
+ * Initializes the smolnes emulator with the given ROM buffer.
+ * @param {array} input_rom - The ROM buffer to initialize the emulator with.
+ */
+::smolnes_init <- function (input_rom) {
+
+  ::rombuf <- input_rom;
+
+  // PRG1 is the last bank. `rombuf[4]` is the number of 16k PRG banks.
+  prg[1] = u8(rombuf[4] - 1);
+  // CHR1 is the last 4k bank.
+  chr[1] = u8((rombuf[5] ? rombuf[5] : 1) * 2 - 1);
+  // Bit 0 of `rombuf[6]` is 0=>horizontal mirroring, 1=>vertical mirroring.
+  mirror = (!(rombuf[6] & 1) ? 1 : 0) + 2;
+  if (rombuf[6] / 16 == 4) {
+    mem(0, 128, 0, 1); // Update to default mmc3 banks
+    prgbits = u8(prgbits - 1);         // 8kb PRG banks
+    chrbits = u8(chrbits - 2);      // 1kb CHR banks
+  }
+
+  // Start at address in reset vector, at $FFFC.
+  PCL = mem(~3, ~0, 0, 0);
+  PCH = mem(~2, ~0, 0, 0);
+
+};
+
+/**
+ * Called once `frame_buffer` is ready to be rendered.
+ * The caller is expected to replace this function with an actual renderer.
+ */
+::smolnes_render <- function () {
+  print("Rendering frame!");
+};
+
+/**
+ * Main loop of the smolnes emulator, simulates one CPU cycle.
+ * The caller is responsible for looping this function.
+ */
+::smolnes_loop <- function () {
 
   cycles = 0;
   nomem = 0;
@@ -878,8 +915,8 @@ function handle_irq () {
       // If NMI is enabled, trigger NMI.
       ppuctrl & 128 ? (nmi_irq = 4) : 0;
       ppustatus = u8(ppustatus | 128);
-
-      EntFire("nes_pixel", "RunScriptCode", "_updatePixel()");
+      // Call render function
+      ::smolnes_render();
     }
 
     // Clear ppustatus.
@@ -894,31 +931,3 @@ function handle_irq () {
     }
   }
 };
-
-::smolnes_main <- function (input_rom) {
-
-  ::rombuf <- input_rom;
-
-  // PRG1 is the last bank. `rombuf[4]` is the number of 16k PRG banks.
-  prg[1] = u8(rombuf[4] - 1);
-  // CHR1 is the last 4k bank.
-  chr[1] = u8((rombuf[5] ? rombuf[5] : 1) * 2 - 1);
-  // Bit 0 of `rombuf[6]` is 0=>horizontal mirroring, 1=>vertical mirroring.
-  mirror = (!(rombuf[6] & 1) ? 1 : 0) + 2;
-  if (rombuf[6] / 16 == 4) {
-    mem(0, 128, 0, 1); // Update to default mmc3 banks
-    prgbits = u8(prgbits - 1);         // 8kb PRG banks
-    chrbits = u8(chrbits - 2);      // 1kb CHR banks
-  }
-
-  // Start at address in reset vector, at $FFFC.
-  PCL = mem(~3, ~0, 0, 0);
-  PCH = mem(~2, ~0, 0, 0);
-
-  ppmod.interval(function () {
-    for (local _i = 0; _i < cycles_per_tick; _i ++) {
-      EntFire("worldspawn", "CallScriptFunction", "smolnes_main_loop");
-    }
-  });
-
-}
