@@ -43,7 +43,14 @@ function i8 (x) {
 // Size of individual pixels (higher = better perf, lower = better qual)
 ::pixel_size <- 7;
 // Used to simulate C "goto" behavior
-::goto <- null;
+::goto <- 0;
+const GOTO_NOMEMOP = 1;
+const GOTO_OPCODE = 2;
+const GOTO_CROSS = 3;
+const GOTO_ADD = 4;
+const GOTO_MEMOP = 5;
+const GOTO_STORE = 6;
+const GOTO_CMP = 7;
 
 // These variables were originally uint8_t and should be typecasted accordingly
 ::prg <- array(4, 0); ::chr <- array(8, 0);   // Current PRG/CHR banks
@@ -365,7 +372,7 @@ function handle_irq () {
       if (opcode & 128) { // LDY/CPY/CPX imm
         read_pc();
         nomem = 1;
-        goto <- "nomemop";
+        goto = GOTO_NOMEMOP;
       }
     }
 
@@ -502,7 +509,7 @@ function handle_irq () {
         default: // ASL/ROL/LSR/ROR A
           nomem = 1;
           val = A;
-          goto <- "nomemop";
+          goto = GOTO_NOMEMOP;
       }
       if (!goto) break;
   }
@@ -514,7 +521,7 @@ function handle_irq () {
       addr_lo = mem(val, 0, 0, 0);
       addr_hi = mem(val + 1, 0, 0, 0);
       cycles = (cycles + 4);
-      goto <- "opcode";
+      goto = GOTO_OPCODE;
     }
 
   case 4: case 5: case 6: // Zeropage
@@ -522,14 +529,14 @@ function handle_irq () {
       addr_lo = read_pc();
       addr_hi = 0;
       cycles = (cycles + 1);
-      goto <- "opcode";
+      goto = GOTO_OPCODE;
     }
 
   case 2: case 9: // Immediate
     if (!goto) {
       read_pc();
       nomem = 1;
-      goto <- "nomemop";
+      goto = GOTO_NOMEMOP;
     }
 
   case 12: case 13: case 14: // Absolute
@@ -537,7 +544,7 @@ function handle_irq () {
       addr_lo = read_pc();
       addr_hi = read_pc();
       cycles = (cycles + 2);
-      goto <- "opcode";
+      goto = GOTO_OPCODE;
     }
 
   case 17: // Zeropage, Y-indexed
@@ -547,7 +554,7 @@ function handle_irq () {
       val = Y;
       tmp = opcode == 145; // STA always uses extra cycle.
       cycles = (cycles + 1);
-      goto <- "cross";
+      goto = GOTO_CROSS;
     }
 
   case 20: case 21: case 22: // Zeropage, X-indexed
@@ -555,7 +562,7 @@ function handle_irq () {
       addr_lo = read_pc() + ((opcode & 214) == 150 ? Y : X); // LDX/STX use Y
       addr_hi = 0;
       cycles = (cycles + 2);
-      goto <- "opcode";
+      goto = GOTO_OPCODE;
     }
 
   case 25: // Absolute, Y-indexed.
@@ -564,7 +571,7 @@ function handle_irq () {
       addr_hi = read_pc();
       val = Y;
       tmp = opcode == 153; // STA always uses extra cycle.
-      goto <- "cross";
+      goto = GOTO_CROSS;
     }
 
   case 28: case 29: case 30: // Absolute, X-indexed.
@@ -578,7 +585,7 @@ function handle_irq () {
       // fallthrough
     }
   // cross:
-  if (goto == "cross") goto = null;
+  if (goto == GOTO_CROSS) goto = 0;
   if (!goto) {
     cross = (addr_lo + val > 255).tointeger();
     addr_hi = u8(addr_hi + cross);
@@ -588,7 +595,7 @@ function handle_irq () {
   }
 
   // opcode:
-  if (goto == "opcode") goto = null;
+  if (goto == GOTO_OPCODE) goto = 0;
   if (!goto) {
     // Read from the given address into `val` for convenience below, except
     // for the STA/STX/STY instructions, and JMP.
@@ -598,7 +605,7 @@ function handle_irq () {
   }
 
   // nomemop:
-  if (goto == "nomemop") goto = null;
+  if (goto == GOTO_NOMEMOP) goto = 0;
   if (!goto) {switch (opcode & 243) { // 64
     case 1:
     case 1 + 16:
@@ -617,13 +624,13 @@ function handle_irq () {
     case 225 + 16:
     // SBC
       val = u8(~val);
-      goto <- "add";
+      goto = GOTO_ADD;
 
     case 97:
     case 97 + 16:
     // ADC
     // add:
-    if (goto == "add") goto = null;
+    if (goto == GOTO_ADD) goto = 0;
     if (!goto) {
       sum = A + val + (P & 1);
       P = u8(P & ~65 | (sum > 255).tointeger() | (~(A ^ val) & (val ^ sum) & 128) / 2);
@@ -637,7 +644,7 @@ function handle_irq () {
     if (!goto) {
       result = u8(val * 2);
       P = P & 254 | val / 128;
-      goto <- "memop";
+      goto = GOTO_MEMOP;
     }
 
     case 34:
@@ -646,7 +653,7 @@ function handle_irq () {
     if (!goto) {
       result = u8(val * 2 | P & 1);
       P = P & 254 | val / 128;
-      goto <- "memop";
+      goto = GOTO_MEMOP;
     }
 
     case 66:
@@ -655,7 +662,7 @@ function handle_irq () {
     if (!goto) {
       result = u8(val / 2);
       P = P & 254 | val & 1;
-      goto <- "memop";
+      goto = GOTO_MEMOP;
     }
 
     case 98:
@@ -664,7 +671,7 @@ function handle_irq () {
     if (!goto) {
       result = u8(val / 2 | u8(P << 7));
       P = P & 254 | val & 1;
-      goto <- "memop";
+      goto = GOTO_MEMOP;
     }
 
     case 194:
@@ -672,7 +679,7 @@ function handle_irq () {
     // DEC
     if (!goto) {
       result = u8(val - 1);
-      goto <- "memop";
+      goto = GOTO_MEMOP;
     }
 
     case 226:
@@ -682,7 +689,7 @@ function handle_irq () {
       // fallthrough
 
     // memop:
-    if (goto == "memop") goto = null;
+    if (goto == GOTO_MEMOP) goto = 0;
     if (!goto) {
       set_nz(result);
       // Write result to A or back to memory.
@@ -721,35 +728,35 @@ function handle_irq () {
     break;
     case 128:
     case 128 + 16:
-    result = Y; goto <- "store"; // STY
+    result = Y; goto = GOTO_STORE; // STY
     if (!goto) break;
     case 129:
     case 129 + 16:
-    if (!goto) {result = A; goto <- "store";} // STA
+    if (!goto) {result = A; goto = GOTO_STORE;} // STA
     if (!goto) break;
     case 130:
     case 130 + 16:
     if (!goto) result = X; // STX
 
     // store:
-    if (goto == "store") goto = null;
+    if (goto == GOTO_STORE) goto = 0;
     if (!goto) {
       mem(addr_lo, addr_hi, result, 1);
       break;
     }
     case 192:
     case 192 + 16:
-    result = Y; goto <- "cmp"; // CPY
+    result = Y; goto = GOTO_CMP; // CPY
     if (!goto) break;
     case 193:
     case 193 + 16:
-    if (!goto) {result = A; goto <- "cmp";} // CMP
+    if (!goto) {result = A; goto = GOTO_CMP;} // CMP
     if (!goto) break;
     case 224:
     case 224 + 16:
     if (!goto) result = X; // CPX
     // cmp:
-    if (goto == "cmp") goto = null;
+    if (goto == GOTO_CMP) goto = 0;
     if (!goto) {
       P = u8(P & ~1 | (result >= val).tointeger());
       set_nz(u8(result - val));
