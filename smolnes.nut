@@ -379,7 +379,7 @@ function handle_irq () {
  * The caller is expected to replace this function with an actual renderer.
  */
 ::smolnes_render <- function () {
-  print("Rendering frame!");
+  print("Rendering frame!\n");
 };
 
 /**
