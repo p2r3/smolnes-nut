@@ -458,7 +458,7 @@ function handle_irq () {
     }
 
   case 8:
-  case 8 + 16:
+  case 24:
 
     if (!goto) {switch (opcode = u8(opcode >>> 4)) {
     case 0: // PHP
@@ -509,7 +509,7 @@ function handle_irq () {
   }
 
   case 10:
-  case 10 + 16:
+  case 26:
 
     if (!goto) {
       switch (opcode >>> 4) {
@@ -638,26 +638,26 @@ function handle_irq () {
   if (goto == GOTO_NOMEMOP) goto = 0;
   if (!goto) {switch (opcode & 243) { // 64
     case 1:
-    case 1 + 16:
+    case 17:
     set_nz(A = u8(A | val));  // ORA
     break;
     case 33:
-    case 33 + 16:
+    case 49:
     set_nz(A = A & val); // AND
     break;
     case 65:
-    case 65 + 16:
+    case 81:
     set_nz(A = u8(A ^ val)); // EOR
 
     break;
     case 225:
-    case 225 + 16:
+    case 241:
     // SBC
       val = u8(~val);
       goto = GOTO_ADD;
 
     case 97:
-    case 97 + 16:
+    case 113:
     // ADC
     // add:
     if (goto == GOTO_ADD) goto = 0;
@@ -669,7 +669,7 @@ function handle_irq () {
     }
 
     case 2:
-    case 2 + 16:
+    case 18:
     // ASL
     if (!goto) {
       result = u8(val * 2);
@@ -678,7 +678,7 @@ function handle_irq () {
     }
 
     case 34:
-    case 34 + 16:
+    case 50:
     // ROL
     if (!goto) {
       result = u8(val * 2 | P & 1);
@@ -687,7 +687,7 @@ function handle_irq () {
     }
 
     case 66:
-    case 66 + 16:
+    case 82:
     // LSR
     if (!goto) {
       result = val / 2;
@@ -696,7 +696,7 @@ function handle_irq () {
     }
 
     case 98:
-    case 98 + 16:
+    case 114:
     // ROR
     if (!goto) {
       result = u8(val / 2 | P << 7);
@@ -705,7 +705,7 @@ function handle_irq () {
     }
 
     case 194:
-    case 194 + 16:
+    case 210:
     // DEC
     if (!goto) {
       result = u8(val - 1);
@@ -713,7 +713,7 @@ function handle_irq () {
     }
 
     case 226:
-    case 226 + 16:
+    case 242:
     // INC
       if (!goto) result = u8(val + 1);
       // fallthrough
@@ -744,28 +744,28 @@ function handle_irq () {
 
     break;
     case 160:
-    case 160 + 16:
+    case 176:
     set_nz(Y = val); // LDY
     break;
     case 161:
-    case 161 + 16:
+    case 177:
     set_nz(A = val); // LDA
     break;
     case 162:
-    case 162 + 16:
+    case 178:
     set_nz(X = val); // LDX
 
     break;
     case 128:
-    case 128 + 16:
+    case 144:
     result = Y; goto = GOTO_STORE; // STY
     if (!goto) break;
     case 129:
-    case 129 + 16:
+    case 145:
     if (!goto) {result = A; goto = GOTO_STORE;} // STA
     if (!goto) break;
     case 130:
-    case 130 + 16:
+    case 146:
     if (!goto) result = X; // STX
 
     // store:
@@ -775,15 +775,15 @@ function handle_irq () {
       break;
     }
     case 192:
-    case 192 + 16:
+    case 208:
     result = Y; goto = GOTO_CMP; // CPY
     if (!goto) break;
     case 193:
-    case 193 + 16:
+    case 209:
     if (!goto) {result = A; goto = GOTO_CMP;} // CMP
     if (!goto) break;
     case 224:
-    case 224 + 16:
+    case 240:
     if (!goto) result = X; // CPX
     // cmp:
     if (goto == GOTO_CMP) goto = 0;
